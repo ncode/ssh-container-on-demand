@@ -29,9 +29,7 @@ func (c *Container) Setup() (err error) {
 
 // Run executes the container and return the id
 func (c *Container) Run() (err error) {
-	out, err := exec.Command(
-		"su", "-l", c.user, "-c", fmt.Sprintf("podman run -dt --rm -P %s", c.image),
-	).Output()
+	out, err := exec.Command("podman", "run", "-dt", "--rm", "-P", c.image).Output()
 	if err != nil {
 		return fmt.Errorf("failed running container with image %s: %s", err.Error(), c.image)
 	}
@@ -43,9 +41,7 @@ func (c *Container) Run() (err error) {
 
 // FindPort lookup for the current port in use by the container
 func (c *Container) FindPort() (port int, err error) {
-	out, err := exec.Command(
-		"su", "-l", c.user, "-c", fmt.Sprintf("podman port %s", c.id),
-	).Output()
+	out, err := exec.Command("podman", "port", c.id).Output()
 	if err != nil {
 		return port, fmt.Errorf("failed finding port of container id %s: %s", c.id, err.Error())
 
@@ -62,7 +58,5 @@ func (c *Container) FindPort() (port int, err error) {
 
 // Stop kill the current running container and destroy it's content
 func (c *Container) Stop() (err error) {
-	return exec.Command(
-		"su", "-l", c.user, "-c", "podman", "stop", c.id,
-	).Run()
+	return exec.Command("podman", "stop", c.id).Run()
 }
