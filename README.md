@@ -19,4 +19,26 @@ ssh -o Port=2222 host
 
 ### Why would I want that?
 
-I have not idea, but I thought it would be fun to implement.
+I've no idea, but I thought it would be fun to implement.
+
+### How to use?
+
+I've only tested it with Centos8, but any platform that can run rootless podman should work without issues.
+
+```
+$ dnf install -y podman
+$ git clone https://github.com/ncode/ssh-container-on-demand.git
+$ cd ssh-container-on-demand
+$ go build
+$ adduser podman
+$ cp init/* /etc/systemd/system/
+$ cp ssh-container-on-demand /usr/local/bin
+$ systemctl daemon-reload
+```
+
+Now you need to create a ~podman/.ssh-container-on-demand.yaml with the container image you would like to use
+
+```yaml
+container:
+  image: my.super.ssh.container.image
+```
