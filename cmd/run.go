@@ -30,30 +30,28 @@ import (
 // runCmd represents the run command
 var runCmd = &cobra.Command{
 	Use:   "run",
-	Short: "A brief description of your command",
-	Long: `A longer description that spans multiple lines and likely contains examples
-and usage of using your command. For example:
-
-Cobra is a CLI library for Go that empowers applications.
-This application is a tool to generate the needed files
-to quickly create a Cobra application.`,
+	Short: "Run the ssh-container-on-demand expecting a fd comming from systemd",
 	Run: func(cmd *cobra.Command, args []string) {
 		listeners, err := activation.Listeners()
 		if err != nil {
-			panic(err)
+			log.Fatalln(err)
 		}
 
 		if len(listeners) != 1 {
-			panic("Unexpected number of socket activation fds")
+			log.Fatalln("Unexpected number of socket activation fds")
 		}
 
 		source, err := listeners[0].Accept()
 		if err != nil {
-			panic(err)
+			log.Fatalln(err)
+		}
+
+		image := viper.GetString("container.image")
+		if image == "" {
+			log.Fatal("Invalid image")
 		}
 
 		c := container.New(
-			viper.GetString("user"),
 			viper.GetString("container.image"),
 		)
 
