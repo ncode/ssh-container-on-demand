@@ -1,0 +1,14 @@
+[Unit]
+Description=SSH Container on Demand service
+Requires=network.target
+After=multi-user.target
+StartLimitBurst=200
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/ssh-container-on-demand run
+User=podman
+
+[Install]
+WantedBy=multi-user.target
