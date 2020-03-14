@@ -30,7 +30,7 @@ func copy(src net.Conn, dst net.Conn, e chan<- error) {
 func Start(source net.Conn, containerAddress string) (err error) {
 	destination, err := net.Dial("tcp", containerAddress)
 	if err != nil {
-		panic(err)
+		return err
 	}
 
 	defer source.Close()

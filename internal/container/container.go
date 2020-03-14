@@ -24,15 +24,13 @@ import (
 
 // Container contains the data related to container driver for containers
 type Container struct {
-	user  string
 	id    string
 	image string
 }
 
 // New returns a new container manager instance
-func New(user string, image string) *Container {
+func New(image string) *Container {
 	return &Container{
-		user:  user,
 		image: image,
 	}
 }
