@@ -25,7 +25,8 @@ If you do not have an SSH key yet, create one with `ssh-keygen -t ed25519`.
 Set `microvm.image` to a Linux ARM64 OCI image containing `/bin/sh`, and set
 `microvm.ssh_public_key` to your public key file. Set `microvm.kernel.path` to
 an uncompressed ARM64 Linux Image with built-in initramfs, virtio PCI, block,
-console and vsock, devtmpfs, tmpfs, procfs, sysfs, and Unix PTY support. A
+console and vsock, devtmpfs, tmpfs, procfs, sysfs, and Unix PTY support.
+Built-in ext4 support is required for the default disk-backed root. A
 [Firecracker CI kernel candidate](https://s3.amazonaws.com/spec.ccfc.min/firecracker-ci/20261125-454a9e84e707-0/aarch64/vmlinux-6.18.62)
 has been tested on Apple silicon. Firecracker publishes it for demonstration
 use; the service does not download it automatically or run Firecracker.
@@ -56,12 +57,23 @@ connections; excess connections are closed. Set `--listen`,
 before SSH authentication: do not expose the listener directly to untrusted
 clients. SSH multiplexing over one TCP connection reuses its VM.
 
+Each VM defaults to one vCPU, 512 MiB of RAM, and a private sparse 1 GiB ext4
+disk. Set `microvm.cpus`, `microvm.memory_mib`, or `microvm.disk_size_mib` to
+override these values. Set `disk_size_mib: 0` to use a RAM-backed root, or
+`memory_mib: 0` to size VM memory automatically. With disk backing, the disk
+must hold the flattened image plus at least 128 MiB, up to 65536 MiB; increase
+the disk size for larger images.
+
 Each guest reads the shared immutable root filesystem archive and extracts it
-into private RAM, with no guest network or host directory mounts. Guest writes
-are discarded when its connection ends or the server shuts down normally
-(SIGINT or SIGTERM). VM memory grows with the size of the flattened image.
+into private RAM or its private disk. There are no guest network or host
+directory mounts. Guest writes are discarded when its connection ends or the
+server shuts down normally (SIGINT or SIGTERM). The private disk file is deleted
+along with the VM; the read-only OCI archive remains cached. With a RAM-backed
+root, automatic memory grows with the size of the flattened image.
 The SSH chroot has read-only guest `/proc` and `/sys` mounts; `/proc` shows
 only processes visible to the logged-in user (`hidepid=2`).
+Interactive SSH sessions can access their virtual terminals under the guest's
+`/dev/pts`.
 
 ## Linux: planned Cloud Hypervisor backend
 

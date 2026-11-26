@@ -20,10 +20,12 @@ package cmd
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"net"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -47,6 +49,19 @@ func init() {
 			if err != nil {
 				return err
 			}
+			cpus, err := resourceValue("microvm.cpus", 1)
+			if err != nil {
+				return err
+			}
+			memory, err := resourceValue("microvm.memory_mib", 512)
+			if err != nil {
+				return err
+			}
+			disk, err := resourceValue("microvm.disk_size_mib", 1024)
+			if err != nil {
+				return err
+			}
+			resources := microvm.Resources{CPUs: cpus, MemoryMiB: memory, DiskSizeMiB: disk}
 			image := viper.GetString("microvm.image")
 			if image == "" {
 				return errors.New("set microvm.image to a Linux ARM64 OCI image")
@@ -60,7 +75,7 @@ func init() {
 				return err
 			}
 			defer cleanup()
-			server, err := microvm.NewServer(rootfs, kernel, initrd, maxConnections, bootTimeout)
+			server, err := microvm.NewServer(rootfs, kernel, initrd, resources, maxConnections, bootTimeout)
 			if err != nil {
 				return err
 			}
@@ -77,13 +92,36 @@ func init() {
 	serve.Flags().DurationVar(&bootTimeout, "boot-timeout", 30*time.Second, "time to wait for guest SSH")
 	rootCmd.AddCommand(serve)
 	worker := &cobra.Command{
-		Use:              microvm.WorkerCommand + " STATE_DIR KERNEL INITRAMFS ROOTFS",
+		Use:              microvm.WorkerCommand + " STATE_DIR KERNEL INITRAMFS ROOTFS CPUS MEMORY_MIB DISK_SIZE_MIB",
 		Hidden:           true,
-		Args:             cobra.ExactArgs(4),
+		Args:             cobra.ExactArgs(7),
 		PersistentPreRun: func(_ *cobra.Command, _ []string) {}, // The parent owns configuration.
 		RunE: func(_ *cobra.Command, args []string) error {
-			return microvm.RunWorker(args[0], args[1], args[2], args[3])
+			cpus, err := strconv.ParseUint(args[4], 10, 64)
+			if err != nil {
+				return fmt.Errorf("worker CPU count: %w", err)
+			}
+			memory, err := strconv.ParseUint(args[5], 10, 64)
+			if err != nil {
+				return fmt.Errorf("worker memory: %w", err)
+			}
+			disk, err := strconv.ParseUint(args[6], 10, 64)
+			if err != nil {
+				return fmt.Errorf("worker disk size: %w", err)
+			}
+			return microvm.RunWorker(args[0], args[1], args[2], args[3], microvm.Resources{CPUs: cpus, MemoryMiB: memory, DiskSizeMiB: disk})
 		},
 	}
 	rootCmd.AddCommand(worker)
+}
+
+func resourceValue(key string, fallback uint64) (uint64, error) {
+	if !viper.IsSet(key) {
+		return fallback, nil
+	}
+	value, err := strconv.ParseUint(viper.GetString(key), 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("%s must be a non-negative integer: %w", key, err)
+	}
+	return value, nil
 }

@@ -27,6 +27,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"time"
 
@@ -38,12 +39,13 @@ const WorkerCommand = "_microvm-worker"
 // Server starts a disposable Linux microVM for each accepted connection.
 type Server struct {
 	executable, image, kernel, initrd string
+	resources                         Resources
 	maxConnections                    int
 	bootTimeout                       time.Duration
 }
 
 // NewServer validates the shared root filesystem and resolves the worker executable before serving.
-func NewServer(image, kernel, initrd string, maxConnections int, bootTimeout time.Duration) (*Server, error) {
+func NewServer(image, kernel, initrd string, resources Resources, maxConnections int, bootTimeout time.Duration) (*Server, error) {
 	if image == "" {
 		return nil, errors.New("cached root filesystem path is empty")
 	}
@@ -57,18 +59,19 @@ func NewServer(image, kernel, initrd string, maxConnections int, bootTimeout tim
 	if err != nil {
 		return nil, err
 	}
-	info, err := os.Stat(image)
+	size, err := rootFSSize(image)
 	if err != nil {
-		return nil, fmt.Errorf("cached root filesystem: %w", err)
+		return nil, err
 	}
-	if !info.Mode().IsRegular() || info.Size() == 0 {
-		return nil, errors.New("cached root filesystem must be a nonempty regular file")
+	resources, err = resources.resolve(size)
+	if err != nil {
+		return nil, err
 	}
 	executable, err := os.Executable()
 	if err != nil {
 		return nil, fmt.Errorf("find worker executable: %w", err)
 	}
-	return &Server{executable: executable, image: image, kernel: kernel, initrd: initrd, maxConnections: maxConnections, bootTimeout: bootTimeout}, nil
+	return &Server{executable: executable, image: image, kernel: kernel, initrd: initrd, resources: resources, maxConnections: maxConnections, bootTimeout: bootTimeout}, nil
 }
 
 // Serve owns listener and waits for all guests to be reaped before returning.
@@ -133,7 +136,8 @@ func (s *Server) handle(parent context.Context, client net.Conn) error {
 	}()
 	socket := filepath.Join(dir, "ssh.sock")
 	// Isolate native VM resources and allow cancellation even during native startup.
-	vm := exec.CommandContext(ctx, s.executable, WorkerCommand, dir, s.kernel, s.initrd, s.image)
+	vm := exec.CommandContext(ctx, s.executable, WorkerCommand, dir, s.kernel, s.initrd, s.image,
+		strconv.FormatUint(s.resources.CPUs, 10), strconv.FormatUint(s.resources.MemoryMiB, 10), strconv.FormatUint(s.resources.DiskSizeMiB, 10))
 	vm.Stdout, vm.Stderr = os.Stderr, os.Stderr
 	if err := vm.Start(); err != nil {
 		return fmt.Errorf("start microVM worker: %w", err)

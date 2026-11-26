@@ -136,7 +136,6 @@ func KernelPath(path string) (string, error) {
 	return path, nil
 }
 func exportRootFS(img v1.Image, path string) error {
-	const limit = 1 << 30
 	out, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 	if err != nil {
 		return err
@@ -144,11 +143,11 @@ func exportRootFS(img v1.Image, path string) error {
 	defer out.Close()
 	reader := mutate.Extract(img)
 	defer reader.Close()
-	n, err := io.Copy(out, io.LimitReader(reader, limit+1))
+	n, err := io.Copy(out, io.LimitReader(reader, maxRootFSBytes+1))
 	if err != nil {
 		return err
 	}
-	if n > limit {
+	if n > maxRootFSBytes {
 		return errors.New("OCI root filesystem exceeds 1 GiB")
 	}
 	if err := out.Truncate((n + 511) / 512 * 512); err != nil {

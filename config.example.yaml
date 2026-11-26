@@ -3,3 +3,6 @@ microvm:
   ssh_public_key: /absolute/path/to/id_ed25519.pub
   kernel:
     path: /absolute/path/to/arm64/Image
+  cpus: 1
+  memory_mib: 512     # 0 chooses memory based on the image and disk mode.
+  disk_size_mib: 1024 # 0 keeps the writable root in RAM.

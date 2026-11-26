@@ -22,6 +22,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
+	"strings"
 	"syscall"
 	"time"
 
@@ -68,8 +70,9 @@ func prepareGuest() error {
 	if err := os.MkdirAll("/dev/pts", 0755); err != nil {
 		return err
 	}
-	if err := unix.Mount("devpts", "/dev/pts", "devpts", unix.MS_NOSUID|unix.MS_NOEXEC, "mode=0620,ptmxmode=0666"); err != nil {
-		return err
+	ptsOptions := fmt.Sprintf("uid=%d,mode=0620,ptmxmode=0000", guestUID)
+	if err := unix.Mount("devpts", "/dev/pts", "devpts", unix.MS_NOSUID|unix.MS_NOEXEC, ptsOptions); err != nil {
+		return fmt.Errorf("mount devpts: %w", err)
 	}
 	if err := os.MkdirAll("/proc", 0755); err != nil {
 		return err
@@ -80,20 +83,13 @@ func prepareGuest() error {
 	if err := os.Mkdir(guestRoot, 0755); err != nil {
 		return err
 	}
-	if err := unix.Mount("tmpfs", guestRoot, "tmpfs", unix.MS_NOSUID|unix.MS_NODEV, "mode=0755"); err != nil {
-		return err
+	if err := mountGuestRoot(); err != nil {
+		return fmt.Errorf("mount writable guest root: %w", err)
 	}
 	if err := os.Chown(guestRoot, guestUID, guestUID); err != nil {
 		return err
 	}
-	var src *os.File
-	for range 50 {
-		src, err = os.Open("/dev/vda")
-		if err == nil || !errors.Is(err, os.ErrNotExist) {
-			break
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
+	src, err := openGuestDisk("/dev/vda")
 	if err != nil {
 		return err
 	}
@@ -125,6 +121,14 @@ func prepareGuest() error {
 	if err := unix.Mount("tmpfs", dev, "tmpfs", unix.MS_NOSUID|unix.MS_NOEXEC, "size=1m,mode=0755"); err != nil {
 		return err
 	}
+	// The SSH server and its chrooted sessions need to see the same PTYs.
+	pts := filepath.Join(dev, "pts")
+	if err := os.Mkdir(pts, 0755); err != nil {
+		return err
+	}
+	if err := unix.Mount("/dev/pts", pts, "", unix.MS_BIND, ""); err != nil {
+		return fmt.Errorf("expose guest /dev/pts: %w", err)
+	}
 	for _, device := range []struct {
 		name         string
 		major, minor uint32
@@ -153,6 +157,34 @@ func prepareGuest() error {
 		}
 	}
 	return provisionGuestAccount(guestRoot)
+}
+
+func mountGuestRoot() error {
+	flags := uintptr(unix.MS_NOSUID | unix.MS_NODEV)
+	cmdline, err := os.ReadFile("/proc/cmdline")
+	if err != nil {
+		return err
+	}
+	if slices.Contains(strings.Fields(string(cmdline)), "sshvm.disk=ext4") {
+		disk, err := openGuestDisk("/dev/vdb")
+		if err != nil {
+			return err
+		}
+		disk.Close()
+		return unix.Mount("/dev/vdb", guestRoot, "ext4", flags, "")
+	}
+	return unix.Mount("tmpfs", guestRoot, "tmpfs", flags, "mode=0755")
+}
+
+func openGuestDisk(path string) (*os.File, error) {
+	for range 50 {
+		file, err := os.Open(path)
+		if err == nil || !errors.Is(err, os.ErrNotExist) {
+			return file, err
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return nil, fmt.Errorf("waiting for guest disk %s: %w", path, os.ErrNotExist)
 }
 
 func guestMountpoint(name string) (string, error) {

@@ -21,7 +21,6 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"os"
 	"path/filepath"
 	"runtime"
 
@@ -30,11 +29,11 @@ import (
 )
 
 // RunWorker owns a single VM until it stops or the parent reaps the worker.
-func RunWorker(dir, kernel, initrd, rootfs string) error {
+func RunWorker(dir, kernel, initrd, rootfs string, resources Resources) error {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
-	cfg, err := workerConfiguration(dir, kernel, initrd, rootfs)
+	cfg, err := workerConfiguration(dir, kernel, initrd, rootfs, resources)
 	if err != nil {
 		return fmt.Errorf("configure Apple Virtualization VM: %w", err)
 	}
@@ -66,21 +65,24 @@ func RunWorker(dir, kernel, initrd, rootfs string) error {
 	return errors.New("lost Apple Virtualization VM state notifications")
 }
 
-func workerConfiguration(dir, kernel, initrd, rootfs string) (*vz.VirtualMachineConfiguration, error) {
-	boot, err := vz.NewLinuxBootLoader(kernel, vz.WithInitrd(initrd), vz.WithCommandLine("console=hvc0 rdinit=/init panic=1"))
+func workerConfiguration(dir, kernel, initrd, rootfs string, resources Resources) (*vz.VirtualMachineConfiguration, error) {
+	size, err := rootFSSize(rootfs)
 	if err != nil {
 		return nil, err
 	}
-	info, err := os.Stat(rootfs)
+	resources, err = resources.resolve(size)
 	if err != nil {
 		return nil, err
 	}
-	if !info.Mode().IsRegular() || info.Size() <= 0 || info.Size() > 1<<30 || info.Size()%512 != 0 {
-		return nil, errors.New("invalid OCI root filesystem archive")
+	cmdline := "console=hvc0 rdinit=/init panic=1"
+	if resources.DiskSizeMiB != 0 {
+		cmdline += " sshvm.disk=ext4"
 	}
-	memory := max(uint64(512<<20), 2*uint64(info.Size())+(256<<20))
-	memory = (memory + (1 << 20) - 1) & ^uint64((1<<20)-1)
-	cfg, err := vz.NewVirtualMachineConfiguration(boot, 1, memory)
+	boot, err := vz.NewLinuxBootLoader(kernel, vz.WithInitrd(initrd), vz.WithCommandLine(cmdline))
+	if err != nil {
+		return nil, err
+	}
+	cfg, err := vz.NewVirtualMachineConfiguration(boot, uint(resources.CPUs), resources.MemoryMiB*mib)
 	if err != nil {
 		return nil, err
 	}
@@ -98,7 +100,19 @@ func workerConfiguration(dir, kernel, initrd, rootfs string) (*vz.VirtualMachine
 	if err != nil {
 		return nil, err
 	}
-	cfg.SetStorageDevicesVirtualMachineConfiguration([]vz.StorageDeviceConfiguration{disk})
+	disks := []vz.StorageDeviceConfiguration{disk}
+	if resources.DiskSizeMiB != 0 {
+		scratch := filepath.Join(dir, "rootfs.ext4")
+		if err := createRootDisk(scratch, int64(resources.DiskSizeMiB)*mib); err != nil {
+			return nil, err
+		}
+		writable, err := diskDevice(scratch, false)
+		if err != nil {
+			return nil, err
+		}
+		disks = append(disks, writable)
+	}
+	cfg.SetStorageDevicesVirtualMachineConfiguration(disks)
 	rng, err := vz.NewVirtioEntropyDeviceConfiguration()
 	if err != nil {
 		return nil, err

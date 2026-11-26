@@ -15,7 +15,7 @@ import (
 )
 
 func TestMain(m *testing.M) {
-	if len(os.Args) == 6 && os.Args[1] == WorkerCommand {
+	if len(os.Args) == 9 && os.Args[1] == WorkerCommand {
 		os.Args = append([]string{os.Args[0], "-test.run=^TestMicroVMWorkerHelper$", "--"}, os.Args[1:]...)
 	}
 	os.Exit(m.Run())
@@ -31,7 +31,7 @@ func TestServeDisposableGuests(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	server := &Server{executable: executable, image: base, kernel: "kernel", initrd: "initrd", maxConnections: 2, bootTimeout: 5 * time.Second}
+	server := &Server{executable: executable, image: base, kernel: "kernel", initrd: "initrd", resources: Resources{CPUs: 2, MemoryMiB: 768, DiskSizeMiB: 384}, maxConnections: 2, bootTimeout: 5 * time.Second}
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -141,8 +141,11 @@ func TestMicroVMWorkerHelper(t *testing.T) {
 	if args == nil {
 		return
 	}
-	if len(args) != 5 || args[0] != WorkerCommand {
+	if len(args) != 8 || args[0] != WorkerCommand {
 		t.Fatalf("unexpected worker arguments: %q", args)
+	}
+	if got := strings.Join(args[5:], " "); got != "2 768 384" {
+		t.Fatalf("worker resources = %q", got)
 	}
 	dir := args[1]
 	data, err := os.ReadFile(args[4])

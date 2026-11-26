@@ -16,6 +16,7 @@ require (
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/docker/cli v29.7.2+incompatible // indirect
 	github.com/docker/docker-credential-helpers v0.9.3 // indirect
+	github.com/google/uuid v1.6.0 // indirect
 	github.com/klauspost/compress v1.19.2 // indirect
 	github.com/mdlayher/socket v0.4.1 // indirect
 	github.com/opencontainers/go-digest v1.0.0 // indirect
@@ -32,6 +33,7 @@ require (
 require (
 	github.com/Code-Hex/vz/v3 v3.7.1
 	github.com/creack/pty v1.1.24
+	github.com/diskfs/go-diskfs v1.9.4
 	github.com/fsnotify/fsnotify v1.10.1 // indirect
 	github.com/gliderlabs/ssh v0.3.8
 	github.com/google/go-containerregistry v0.22.1
