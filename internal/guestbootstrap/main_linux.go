@@ -118,16 +118,9 @@ func prepareGuest() error {
 	if err != nil || (info.Mode()&os.ModeSymlink == 0 && (!info.Mode().IsRegular() || info.Mode().Perm()&0111 == 0)) {
 		return errors.New("OCI image has no usable /bin/sh")
 	}
-	dev := filepath.Join(guestRoot, "dev")
-	info, err = os.Lstat(dev)
-	if errors.Is(err, os.ErrNotExist) {
-		if err := os.Mkdir(dev, 0755); err != nil {
-			return err
-		}
-	} else if err != nil {
+	dev, err := guestMountpoint("dev")
+	if err != nil {
 		return err
-	} else if !info.IsDir() {
-		return errors.New("OCI root filesystem /dev must be a directory")
 	}
 	if err := unix.Mount("tmpfs", dev, "tmpfs", unix.MS_NOSUID|unix.MS_NOEXEC, "size=1m,mode=0755"); err != nil {
 		return err
@@ -146,5 +139,33 @@ func prepareGuest() error {
 			return err
 		}
 	}
+	const flags = unix.MS_RDONLY | unix.MS_NOSUID | unix.MS_NODEV | unix.MS_NOEXEC
+	for _, fs := range []struct{ name, kind, options string }{
+		{"proc", "proc", "hidepid=2"},
+		{"sys", "sysfs", ""},
+	} {
+		target, err := guestMountpoint(fs.name)
+		if err != nil {
+			return err
+		}
+		if err := unix.Mount(fs.kind, target, fs.kind, flags, fs.options); err != nil {
+			return fmt.Errorf("mount guest /%s: %w", fs.name, err)
+		}
+	}
 	return provisionGuestAccount(guestRoot)
+}
+
+func guestMountpoint(name string) (string, error) {
+	target := filepath.Join(guestRoot, name)
+	if err := os.Mkdir(target, 0755); err != nil && !errors.Is(err, os.ErrExist) {
+		return "", err
+	}
+	info, err := os.Lstat(target)
+	if err != nil {
+		return "", err
+	}
+	if !info.IsDir() {
+		return "", fmt.Errorf("guest mountpoint /%s must be a directory", name)
+	}
+	return target, nil
 }
