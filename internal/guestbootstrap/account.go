@@ -6,21 +6,18 @@ import (
 	"os"
 	"strconv"
 	"strings"
+
+	"github.com/ncode/ssh-container-on-demand/internal/guestconfig"
 )
 
-const (
-	guestName = "guest"
-	guestUID  = 1000
-	guestHome = "/home/" + guestName
-)
-
-func provisionGuestAccount(dir string) error {
+func provisionGuestAccount(dir string, account guestconfig.Account) error {
 	root, err := os.OpenRoot(dir)
 	if err != nil {
 		return err
 	}
 	defer root.Close()
-	for _, name := range []string{"etc", "home", strings.TrimPrefix(guestHome, "/")} {
+	home := strings.TrimPrefix(account.Home(), "/")
+	for _, name := range []string{"etc", "home", home} {
 		if err := root.Mkdir(name, 0755); err != nil && !errors.Is(err, os.ErrExist) {
 			return err
 		}
@@ -32,21 +29,20 @@ func provisionGuestAccount(dir string) error {
 			return fmt.Errorf("guest path %s must be a directory", name)
 		}
 	}
-	home := strings.TrimPrefix(guestHome, "/")
-	if err := root.Chown(home, guestUID, guestUID); err != nil {
+	if err := root.Chown(home, int(account.UID), int(account.UID)); err != nil {
 		return err
 	}
 	if err := root.Chmod(home, 0750); err != nil {
 		return err
 	}
-	passwd := fmt.Sprintf("%s:x:%d:%d::%s:/bin/sh", guestName, guestUID, guestUID, guestHome)
-	if err := writeGuestRecord(root, "etc/passwd", passwd); err != nil {
+	passwd := fmt.Sprintf("%s:x:%d:%d::%s:/bin/sh", account.Username, account.UID, account.UID, account.Home())
+	if err := writeGuestRecord(root, "etc/passwd", passwd, account); err != nil {
 		return err
 	}
-	return writeGuestRecord(root, "etc/group", fmt.Sprintf("%s:x:%d:", guestName, guestUID))
+	return writeGuestRecord(root, "etc/group", fmt.Sprintf("%s:x:%d:", account.Username, account.UID), account)
 }
 
-func writeGuestRecord(root *os.Root, path, record string) error {
+func writeGuestRecord(root *os.Root, path, record string, account guestconfig.Account) error {
 	var data []byte
 	info, err := root.Lstat(path)
 	switch {
@@ -69,14 +65,14 @@ func writeGuestRecord(root *os.Root, path, record string) error {
 	if err != nil {
 		return err
 	}
-	if _, err := file.WriteString(withGuestRecord(string(data), record)); err != nil {
+	if _, err := file.WriteString(withGuestRecord(string(data), record, account)); err != nil {
 		file.Close()
 		return err
 	}
 	return file.Close()
 }
 
-func withGuestRecord(data, record string) string {
+func withGuestRecord(data, record string, account guestconfig.Account) string {
 	if data == "" {
 		return record + "\n"
 	}
@@ -85,7 +81,7 @@ func withGuestRecord(data, record string) string {
 		fields := strings.SplitN(line, ":", 4)
 		if len(fields) >= 3 {
 			id, err := strconv.ParseUint(fields[2], 10, 32)
-			if fields[0] == guestName || (err == nil && id == guestUID) {
+			if fields[0] == account.Username || (err == nil && id == account.UID) {
 				continue
 			}
 		}

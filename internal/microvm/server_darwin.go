@@ -28,6 +28,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -35,6 +36,7 @@ import (
 )
 
 const WorkerCommand = "_microvm-worker"
+const stateDirPrefix = "sshvm-"
 
 // Server starts a disposable Linux microVM for each accepted connection.
 type Server struct {
@@ -125,7 +127,7 @@ func (s *Server) handle(parent context.Context, client net.Conn) error {
 	defer stopBoot()
 
 	// Keep the Unix socket path short regardless of TMPDIR or the image path.
-	dir, err := os.MkdirTemp("/tmp", "sshvm-")
+	dir, err := os.MkdirTemp("/tmp", stateDirPrefix)
 	if err != nil {
 		return err
 	}
@@ -136,8 +138,9 @@ func (s *Server) handle(parent context.Context, client net.Conn) error {
 	}()
 	socket := filepath.Join(dir, "ssh.sock")
 	// Isolate native VM resources and allow cancellation even during native startup.
+	hostname := vmHostname(strings.TrimPrefix(filepath.Base(dir), stateDirPrefix))
 	vm := exec.CommandContext(ctx, s.executable, WorkerCommand, dir, s.kernel, s.initrd, s.image,
-		strconv.FormatUint(s.resources.CPUs, 10), strconv.FormatUint(s.resources.MemoryMiB, 10), strconv.FormatUint(s.resources.DiskSizeMiB, 10))
+		strconv.FormatUint(s.resources.CPUs, 10), strconv.FormatUint(s.resources.MemoryMiB, 10), strconv.FormatUint(s.resources.DiskSizeMiB, 10), hostname)
 	vm.Stdout, vm.Stderr = os.Stderr, os.Stderr
 	if err := vm.Start(); err != nil {
 		return fmt.Errorf("start microVM worker: %w", err)

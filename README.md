@@ -1,91 +1,97 @@
-# ssh container on demand
+# SSH Container on Demand
 
-Builds use Go modules and require Go 1.25.7 or later. The first build may
-download dependencies.
+Get a fresh Linux shell over SSH. On macOS, each admitted TCP connection boots a disposable ARM64 microVM from an OCI image, using Apple's Virtualization.framework directly. Disconnecting discards the guest and its writes. You don't need a container runtime, a guest OpenSSH server, or a Firecracker executable.
 
-## macOS: disposable Linux microVMs
+## Quick start
 
-On Apple silicon macOS 13 or later, the `serve` command starts a disposable
-Linux ARM64 microVM for each accepted TCP connection. It uses Apple's
-Virtualization.framework directly. The signed project binary starts its own
-worker process for each guest.
-
-### Quick start
-
-With Xcode or the Command Line Tools installed, run from the repository root:
+You'll need an Apple silicon Mac running macOS 13 or later, Go 1.25.7 or later, and Xcode or the Command Line Tools. The first build may download Go modules.
 
 ```sh
 make
 cp config.example.yaml config.yaml
-# Edit config.yaml and set the public key and kernel paths.
+```
+
+`make` builds and embeds the Linux guest bootstrap, then signs the macOS binary with the virtualization entitlement. Edit [the example config](config.example.yaml) you copied to `config.yaml`:
+
+- `microvm.image`: a Linux ARM64 OCI image with `/bin/sh`. The example uses Alpine. The image supplies the filesystem, not the Linux kernel; its entrypoint and command are not run.
+- `microvm.ssh_public_key`: the path to one OpenSSH public key file. If you need a key, run `ssh-keygen -t ed25519`.
+- `microvm.kernel.path`: the path to an uncompressed ARM64 Linux `Image`. The kernel needs built-in initramfs, virtio PCI, block, console and vsock, devtmpfs, tmpfs, procfs, sysfs and Unix PTY support. The default disk-backed root also needs built-in ext4.
+
+The [Firecracker CI kernel](https://s3.amazonaws.com/spec.ccfc.min/firecracker-ci/20261125-454a9e84e707-0/aarch64/vmlinux-6.18.62) was tested on Apple silicon. It's a demonstration artifact, not a production kernel or an automatic download.
+
+Start the service:
+
+```sh
 ./ssh-container-on-demand --config config.yaml serve
 ```
 
-If you do not have an SSH key yet, create one with `ssh-keygen -t ed25519`.
-Set `microvm.image` to a Linux ARM64 OCI image containing `/bin/sh`, and set
-`microvm.ssh_public_key` to your public key file. Set `microvm.kernel.path` to
-an uncompressed ARM64 Linux Image with built-in initramfs, virtio PCI, block,
-console and vsock, devtmpfs, tmpfs, procfs, sysfs, and Unix PTY support.
-Built-in ext4 support is required for the default disk-backed root. A
-[Firecracker CI kernel candidate](https://s3.amazonaws.com/spec.ccfc.min/firecracker-ci/20261125-454a9e84e707-0/aarch64/vmlinux-6.18.62)
-has been tested on Apple silicon. Firecracker publishes it for demonstration
-use; the service does not download it automatically or run Firecracker.
-
-`make` builds and embeds the Linux guest bootstrap and signs the macOS binary.
-First startup pulls and caches the flattened OCI root filesystem; image tags
-are resolved on each startup and cached by digest under
-`~/Library/Caches/ssh-container-on-demand`. The guest uses a Go SSH server
-over vsock; no Debian runner, cloud-init or OpenSSH server is required.
-
-In another terminal:
+In another terminal, connect with the matching private key. Verify the SSH host key against the fingerprint printed by `serve` before trusting it.
 
 ```sh
-ssh -i "$HOME/.ssh/id_ed25519" -p 2222 guest@127.0.0.1
+ssh -i "$HOME/.ssh/id_ed25519" -p 2222 shell@127.0.0.1
 ```
 
-The flattened root filesystem is limited to 1 GiB. The guest shell runs as the
-non-root `guest` user (UID 1000) inside the image root filesystem. The guest
-has provisioned `/etc/passwd` and `/etc/group` records, a writable, disposable
-home directory and login working directory at `/home/guest`, and hostname
-`sshvm`. OCI entrypoint and command are not run. The SSH host key is stable per
-local user cache and differs from the previous Debian-based implementation;
-verify it before trusting it.
+## How it works
 
-The default listener is `127.0.0.1:2222`, with at most two simultaneous
-connections; excess connections are closed. Set `--listen`,
-`--max-connections`, and `--boot-timeout` (default `30s`) as needed. A VM starts
-before SSH authentication: do not expose the listener directly to untrusted
-clients. SSH multiplexing over one TCP connection reuses its VM.
+```mermaid
+sequenceDiagram
+    participant C as SSH client
+    participant R as OCI registry
+    box macOS host
+        participant S as serve
+        participant A as Local cache
+        participant W as VM worker
+    end
+    participant G as Linux guest
 
-Each VM defaults to one vCPU, 512 MiB of RAM, and a private sparse 1 GiB ext4
-disk. Set `microvm.cpus`, `microvm.memory_mib`, or `microvm.disk_size_mib` to
-override these values. Set `disk_size_mib: 0` to use a RAM-backed root, or
-`memory_mib: 0` to size VM memory automatically. With disk backing, the disk
-must hold the flattened image plus at least 128 MiB, up to 65536 MiB; increase
-the disk size for larger images.
+    Note over S,W: 1. Server startup
+    S->>R: Resolve ARM64 image
+    alt Cache miss
+        S->>R: Fetch OCI layers
+        S->>A: Cache rootfs by digest
+    end
+    S->>A: Load or create SSH host key
+    S->>S: Prepare initramfs<br/>Listen for TCP
 
-Each guest reads the shared immutable root filesystem archive and extracts it
-into private RAM or its private disk. There are no guest network or host
-directory mounts. Guest writes are discarded when its connection ends or the
-server shuts down normally (SIGINT or SIGTERM). The private disk file is deleted
-along with the VM; the read-only OCI archive remains cached. With a RAM-backed
-root, automatic memory grows with the size of the flattened image.
-The SSH chroot has read-only guest `/proc` and `/sys` mounts; `/proc` shows
-only processes visible to the logged-in user (`hidepid=2`).
-Interactive SSH sessions can access their virtual terminals under the guest's
-`/dev/pts`.
+    Note over C,G: 2. Each admitted connection
+    C->>S: Open TCP connection
+    S->>W: Start worker<br/>with a random hostname
+    Note over W,G: Attach read-only rootfs archive<br/>and a private disk by default
+    W->>G: Boot kernel and Go init<br/>via Virtualization.framework
+    G->>G: Set hostname<br/>Unpack image and provision account
+    S->>W: Wait on Unix socket
+    W->>G: Connect to SSH on vsock port 22
+    Note over C,G: Relay SSH end to end over TCP, Unix socket and vsock
+    G->>G: Authenticate and start<br/>a non-root shell
+
+    Note over C,G: 3. Teardown
+    C-->>S: Disconnect
+    S->>W: Cancel and reap worker
+    S->>S: Delete VM state and disk
+```
+
+- **Shared across guests:** `serve` resolves the image at startup and reuses a flattened archive by digest. The archive (limited to 1 GiB) and the stable SSH host key are stored under `~/Library/Caches/ssh-container-on-demand`. The initramfs is prepared for the current server run.
+- **Private to each VM:** The guest unpacks the archive into a writable root filesystem. There is no guest NIC or host directory mount. The chroot includes read-only `/proc` and `/sys`, hides other users' processes with `hidepid=2`, and makes SSH terminals available under `/dev/pts`.
+- **Deleted on disconnect or normal shutdown:** The worker and its VM are torn down, and the private disk file is removed. The host cache remains. SSH multiplexing reuses one TCP connection, so multiplexed sessions share one VM.
+
+## Configuration
+
+Set these optional values under `microvm:` in your config file:
+
+| Setting | Default | What it controls |
+| --- | --- | --- |
+| `username` | `shell` | SSH login name and writable home directory (`/home/<username>`). |
+| `uid` | `1000` | Non-root UID and primary GID. The guest provisions matching `/etc/passwd` and `/etc/group` entries. |
+| `cpus` | `1` | vCPUs per VM. |
+| `memory_mib` | `512` | RAM in MiB, assigned at boot. Use `0` to size it automatically for the selected root filesystem mode. |
+| `disk_size_mib` | `1024` | Capacity in MiB of the private sparse ext4 disk. Use `0` for a RAM-backed writable root instead. |
+
+The default login starts in `/home/shell`. If you set `username`, use that name in your SSH command. Each guest's hostname is picked from the [bundled Brazilian mythology list](internal/microvm/brazilian_mythology_names.txt), normalized for Linux and given a suffix to distinguish concurrent VMs, for example `pirarucu-2750431623`. This is the hostname you see inside the guest, not a new address to connect to.
+
+A disk must be at least the flattened archive size plus 128 MiB and no larger than 64 GiB. Increase `disk_size_mib` for larger images. Automatic memory sizing happens only before boot; with a RAM-backed root, it increases the allocation for larger images.
+
+`serve` listens on `127.0.0.1:2222` by default. Set `--listen` to change it, `--max-connections` to change the maximum number of concurrent guests (default `2`), or `--boot-timeout` to change how long it waits for guest SSH (default `30s`). Excess TCP connections are closed. Because a VM boots before the client's SSH key is checked, don't expose the listener directly to untrusted clients.
 
 ## Linux: planned Cloud Hypervisor backend
 
-Serving SSH is currently supported only on macOS. The planned Linux backend is
-[Cloud Hypervisor](https://www.cloudhypervisor.org/docs/prologue/quick-start/)
-on a host with access to `/dev/kvm`.
-
-1. Reuse the per-connection listener, root filesystem archive, Go init and
-   cleanup flow. Start one Cloud Hypervisor process without a guest NIC or host
-   mounts.
-2. Forward SSH to guest port 22 over [Cloud Hypervisor vsock](https://github.com/cloud-hypervisor/cloud-hypervisor/blob/main/docs/vsock.md).
-   Send `CONNECT 22` followed by a newline and consume the `OK` reply before
-   relaying SSH. Reuse the OCI preparation path and `microvm.image` configuration.
-3. Verify two independent SSH connections, discarded guest writes, and VM
-   cleanup on disconnect on a KVM host before adding systemd units.
+Serving SSH is currently supported only on macOS. The planned Linux backend is [Cloud Hypervisor](https://www.cloudhypervisor.org/docs/prologue/quick-start/) on a host with access to `/dev/kvm`. It will reuse the OCI cache, Go guest bootstrap, and per-connection cleanup, with [Cloud Hypervisor's vsock transport](https://github.com/cloud-hypervisor/cloud-hypervisor/blob/main/docs/vsock.md) to relay SSH to guest port 22.

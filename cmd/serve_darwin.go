@@ -29,6 +29,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/ncode/ssh-container-on-demand/internal/guestconfig"
 	"github.com/ncode/ssh-container-on-demand/internal/microvm"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -62,6 +63,22 @@ func init() {
 				return err
 			}
 			resources := microvm.Resources{CPUs: cpus, MemoryMiB: memory, DiskSizeMiB: disk}
+			username := "shell"
+			if viper.IsSet("microvm.username") {
+				var ok bool
+				username, ok = viper.Get("microvm.username").(string)
+				if !ok {
+					return errors.New("microvm.username must be a string")
+				}
+			}
+			uid, err := resourceValue("microvm.uid", 1000)
+			if err != nil {
+				return err
+			}
+			account := guestconfig.Account{Username: username, UID: uid}
+			if err := account.Validate(); err != nil {
+				return err
+			}
 			image := viper.GetString("microvm.image")
 			if image == "" {
 				return errors.New("set microvm.image to a Linux ARM64 OCI image")
@@ -70,7 +87,7 @@ func init() {
 			if err != nil {
 				return err
 			}
-			initrd, cleanup, err := microvm.PrepareInitramfs(viper.GetString("microvm.ssh_public_key"))
+			initrd, cleanup, err := microvm.PrepareInitramfs(viper.GetString("microvm.ssh_public_key"), account)
 			if err != nil {
 				return err
 			}
@@ -92,9 +109,9 @@ func init() {
 	serve.Flags().DurationVar(&bootTimeout, "boot-timeout", 30*time.Second, "time to wait for guest SSH")
 	rootCmd.AddCommand(serve)
 	worker := &cobra.Command{
-		Use:              microvm.WorkerCommand + " STATE_DIR KERNEL INITRAMFS ROOTFS CPUS MEMORY_MIB DISK_SIZE_MIB",
+		Use:              microvm.WorkerCommand + " STATE_DIR KERNEL INITRAMFS ROOTFS CPUS MEMORY_MIB DISK_SIZE_MIB HOSTNAME",
 		Hidden:           true,
-		Args:             cobra.ExactArgs(7),
+		Args:             cobra.ExactArgs(8),
 		PersistentPreRun: func(_ *cobra.Command, _ []string) {}, // The parent owns configuration.
 		RunE: func(_ *cobra.Command, args []string) error {
 			cpus, err := strconv.ParseUint(args[4], 10, 64)
@@ -109,7 +126,7 @@ func init() {
 			if err != nil {
 				return fmt.Errorf("worker disk size: %w", err)
 			}
-			return microvm.RunWorker(args[0], args[1], args[2], args[3], microvm.Resources{CPUs: cpus, MemoryMiB: memory, DiskSizeMiB: disk})
+			return microvm.RunWorker(args[0], args[1], args[2], args[3], microvm.Resources{CPUs: cpus, MemoryMiB: memory, DiskSizeMiB: disk}, args[7])
 		},
 	}
 	rootCmd.AddCommand(worker)

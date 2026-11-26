@@ -7,6 +7,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"embed"
+	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -14,13 +15,14 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/ncode/ssh-container-on-demand/internal/guestconfig"
 	"golang.org/x/crypto/ssh"
 )
 
 //go:embed assets
 var initAssets embed.FS
 
-func PrepareInitramfs(keyPath string) (string, func(), error) {
+func PrepareInitramfs(keyPath string, account guestconfig.Account) (string, func(), error) {
 	if keyPath == "" {
 		return "", nil, errors.New("set microvm.ssh_public_key to an OpenSSH public key file")
 	}
@@ -49,10 +51,15 @@ func PrepareInitramfs(keyPath string) (string, func(), error) {
 		return "", nil, err
 	}
 	log.Printf("SSH host key fingerprint: %s", ssh.FingerprintSHA256(signer.PublicKey()))
+	accountData, err := json.Marshal(account)
+	if err != nil {
+		return "", nil, err
+	}
 	var archive bytes.Buffer
 	appendCPIO(&archive, "init", 0100755, bootstrap)
 	appendCPIO(&archive, "authorized_key", 0100400, ssh.MarshalAuthorizedKey(key))
 	appendCPIO(&archive, "host_key", 0100400, hostKey)
+	appendCPIO(&archive, "guest_account", 0100400, accountData)
 	appendCPIO(&archive, "TRAILER!!!", 0, nil)
 	file, err := os.CreateTemp("", "sshvm-initramfs-*.cpio")
 	if err != nil {

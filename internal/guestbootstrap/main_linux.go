@@ -16,6 +16,7 @@ limitations under the License.
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -27,6 +28,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/ncode/ssh-container-on-demand/internal/guestconfig"
 	"golang.org/x/sys/unix"
 )
 
@@ -42,9 +44,12 @@ func main() {
 	if len(os.Args) != 1 {
 		log.Fatal("invalid guest bootstrap arguments")
 	}
-	if err := prepareGuest(); err != nil {
+	account, err := readGuestAccount()
+	if err != nil {
+		log.Printf("read guest account: %q", err.Error())
+	} else if err := prepareGuest(account); err != nil {
 		log.Printf("prepare guest: %q", err.Error())
-	} else if err := serveSSH(); err != nil {
+	} else if err := serveSSH(account); err != nil {
 		log.Printf("serve SSH: %q", err.Error())
 	}
 	for {
@@ -52,7 +57,19 @@ func main() {
 	}
 }
 
-func prepareGuest() error {
+func readGuestAccount() (guestconfig.Account, error) {
+	var account guestconfig.Account
+	data, err := os.ReadFile("/guest_account")
+	if err != nil {
+		return account, err
+	}
+	if err := json.Unmarshal(data, &account); err != nil {
+		return account, err
+	}
+	return account, account.Validate()
+}
+
+func prepareGuest(account guestconfig.Account) error {
 	if err := os.MkdirAll("/dev", 0755); err != nil {
 		return err
 	}
@@ -64,13 +81,10 @@ func prepareGuest() error {
 		return err
 	}
 	log.SetOutput(serial)
-	if err := unix.Sethostname([]byte("sshvm")); err != nil {
-		return fmt.Errorf("set guest hostname: %w", err)
-	}
 	if err := os.MkdirAll("/dev/pts", 0755); err != nil {
 		return err
 	}
-	ptsOptions := fmt.Sprintf("uid=%d,mode=0620,ptmxmode=0000", guestUID)
+	ptsOptions := fmt.Sprintf("uid=%d,mode=0620,ptmxmode=0000", account.UID)
 	if err := unix.Mount("devpts", "/dev/pts", "devpts", unix.MS_NOSUID|unix.MS_NOEXEC, ptsOptions); err != nil {
 		return fmt.Errorf("mount devpts: %w", err)
 	}
@@ -80,13 +94,31 @@ func prepareGuest() error {
 	if err := unix.Mount("proc", "/proc", "proc", 0, ""); err != nil {
 		return err
 	}
+	cmdline, err := os.ReadFile("/proc/cmdline")
+	if err != nil {
+		return err
+	}
+	args := strings.Fields(string(cmdline))
+	var hostname string
+	for _, arg := range args {
+		if value, ok := strings.CutPrefix(arg, "sshvm.hostname="); ok {
+			hostname = value
+			break
+		}
+	}
+	if hostname == "" {
+		return errors.New("missing guest hostname")
+	}
+	if err := unix.Sethostname([]byte(hostname)); err != nil {
+		return fmt.Errorf("set guest hostname: %w", err)
+	}
 	if err := os.Mkdir(guestRoot, 0755); err != nil {
 		return err
 	}
-	if err := mountGuestRoot(); err != nil {
+	if err := mountGuestRoot(slices.Contains(args, "sshvm.disk=ext4")); err != nil {
 		return fmt.Errorf("mount writable guest root: %w", err)
 	}
-	if err := os.Chown(guestRoot, guestUID, guestUID); err != nil {
+	if err := os.Chown(guestRoot, int(account.UID), int(account.UID)); err != nil {
 		return err
 	}
 	src, err := openGuestDisk("/dev/vda")
@@ -99,7 +131,7 @@ func prepareGuest() error {
 		return err
 	}
 	cmd := exec.Command(exe, "unpack", guestRoot)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Credential: &syscall.Credential{Uid: guestUID, Gid: guestUID}}
+	cmd.SysProcAttr = &syscall.SysProcAttr{Credential: &syscall.Credential{Uid: uint32(account.UID), Gid: uint32(account.UID)}}
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = src, serial, serial
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("unpack OCI root filesystem: %w", err)
@@ -156,16 +188,12 @@ func prepareGuest() error {
 			return fmt.Errorf("mount guest /%s: %w", fs.name, err)
 		}
 	}
-	return provisionGuestAccount(guestRoot)
+	return provisionGuestAccount(guestRoot, account)
 }
 
-func mountGuestRoot() error {
+func mountGuestRoot(diskBacked bool) error {
 	flags := uintptr(unix.MS_NOSUID | unix.MS_NODEV)
-	cmdline, err := os.ReadFile("/proc/cmdline")
-	if err != nil {
-		return err
-	}
-	if slices.Contains(strings.Fields(string(cmdline)), "sshvm.disk=ext4") {
+	if diskBacked {
 		disk, err := openGuestDisk("/dev/vdb")
 		if err != nil {
 			return err

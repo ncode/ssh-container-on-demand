@@ -29,11 +29,11 @@ import (
 )
 
 // RunWorker owns a single VM until it stops or the parent reaps the worker.
-func RunWorker(dir, kernel, initrd, rootfs string, resources Resources) error {
+func RunWorker(dir, kernel, initrd, rootfs string, resources Resources, hostname string) error {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
-	cfg, err := workerConfiguration(dir, kernel, initrd, rootfs, resources)
+	cfg, err := workerConfiguration(dir, kernel, initrd, rootfs, resources, hostname)
 	if err != nil {
 		return fmt.Errorf("configure Apple Virtualization VM: %w", err)
 	}
@@ -65,7 +65,7 @@ func RunWorker(dir, kernel, initrd, rootfs string, resources Resources) error {
 	return errors.New("lost Apple Virtualization VM state notifications")
 }
 
-func workerConfiguration(dir, kernel, initrd, rootfs string, resources Resources) (*vz.VirtualMachineConfiguration, error) {
+func workerConfiguration(dir, kernel, initrd, rootfs string, resources Resources, hostname string) (*vz.VirtualMachineConfiguration, error) {
 	size, err := rootFSSize(rootfs)
 	if err != nil {
 		return nil, err
@@ -74,7 +74,10 @@ func workerConfiguration(dir, kernel, initrd, rootfs string, resources Resources
 	if err != nil {
 		return nil, err
 	}
-	cmdline := "console=hvc0 rdinit=/init panic=1"
+	if !hostnamePattern.MatchString(hostname) {
+		return nil, errors.New("invalid guest hostname")
+	}
+	cmdline := "console=hvc0 rdinit=/init panic=1 sshvm.hostname=" + hostname
 	if resources.DiskSizeMiB != 0 {
 		cmdline += " sshvm.disk=ext4"
 	}

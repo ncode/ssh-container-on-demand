@@ -11,11 +11,12 @@ import (
 	"github.com/creack/pty"
 	server "github.com/gliderlabs/ssh"
 	"github.com/mdlayher/vsock"
+	"github.com/ncode/ssh-container-on-demand/internal/guestconfig"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/sys/unix"
 )
 
-func serveSSH() error {
+func serveSSH(account guestconfig.Account) error {
 	authorized, err := os.ReadFile("/authorized_key")
 	if err != nil {
 		return err
@@ -40,24 +41,24 @@ func serveSSH() error {
 	srv := &server.Server{
 		HostSigners: []server.Signer{signer},
 		PublicKeyHandler: func(ctx server.Context, provided server.PublicKey) bool {
-			return ctx.User() == guestName && server.KeysEqual(key, provided)
+			return ctx.User() == account.Username && server.KeysEqual(key, provided)
 		},
-		Handler: serveSession,
+		Handler: func(session server.Session) { serveSession(session, account) },
 	}
 	return srv.Serve(listener)
 }
 
-func serveSession(session server.Session) {
+func serveSession(session server.Session, account guestconfig.Account) {
 	args := []string{"-l"}
 	if command := session.RawCommand(); command != "" {
 		args = []string{"-c", command}
 	}
 	cmd := exec.CommandContext(session.Context(), "/bin/sh", args...)
-	cmd.Dir = guestHome
-	cmd.Env = []string{"HOME=" + guestHome, "USER=" + guestName, "LOGNAME=" + guestName, "PATH=/usr/local/bin:/usr/bin:/bin"}
+	cmd.Dir = account.Home()
+	cmd.Env = []string{"HOME=" + cmd.Dir, "USER=" + account.Username, "LOGNAME=" + account.Username, "PATH=/usr/local/bin:/usr/bin:/bin"}
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		Chroot:     guestRoot,
-		Credential: &syscall.Credential{Uid: guestUID, Gid: guestUID},
+		Credential: &syscall.Credential{Uid: uint32(account.UID), Gid: uint32(account.UID)},
 	}
 	term, windows, hasPTY := session.Pty()
 	var err error

@@ -15,7 +15,7 @@ import (
 )
 
 func TestMain(m *testing.M) {
-	if len(os.Args) == 9 && os.Args[1] == WorkerCommand {
+	if len(os.Args) == 10 && os.Args[1] == WorkerCommand {
 		os.Args = append([]string{os.Args[0], "-test.run=^TestMicroVMWorkerHelper$", "--"}, os.Args[1:]...)
 	}
 	os.Exit(m.Run())
@@ -141,13 +141,16 @@ func TestMicroVMWorkerHelper(t *testing.T) {
 	if args == nil {
 		return
 	}
-	if len(args) != 8 || args[0] != WorkerCommand {
+	if len(args) != 9 || args[0] != WorkerCommand {
 		t.Fatalf("unexpected worker arguments: %q", args)
 	}
-	if got := strings.Join(args[5:], " "); got != "2 768 384" {
+	if got := strings.Join(args[5:8], " "); got != "2 768 384" {
 		t.Fatalf("worker resources = %q", got)
 	}
 	dir := args[1]
+	if hostname := args[8]; !hostnamePattern.MatchString(hostname) || !strings.HasSuffix(hostname, "-"+strings.TrimPrefix(filepath.Base(dir), stateDirPrefix)) {
+		t.Fatalf("worker hostname = %q for state %q", hostname, dir)
+	}
 	data, err := os.ReadFile(args[4])
 	if err != nil || string(data) != "base" {
 		t.Fatalf("root filesystem = %q, error = %v", data, err)

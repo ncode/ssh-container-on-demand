@@ -1,6 +1,8 @@
 microvm:
   image: docker.io/library/alpine:3.22
   ssh_public_key: /absolute/path/to/id_ed25519.pub
+  username: shell
+  uid: 1000
   kernel:
     path: /absolute/path/to/arm64/Image
   cpus: 1
